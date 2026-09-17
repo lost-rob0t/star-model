@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import pathlib
@@ -26,6 +27,7 @@ def args_parser() -> argparse.ArgumentParser:
     p.add_argument("--base-model", required=True)
     p.add_argument("--train", required=True)
     p.add_argument("--validation")
+    p.add_argument("--manifest", default="manifest.json")
     p.add_argument("--output", default="/workspace/output")
     p.add_argument("--max-seq-length", type=int, default=8192)
     p.add_argument("--batch-size", type=int, default=1)
@@ -35,6 +37,55 @@ def args_parser() -> argparse.ArgumentParser:
     p.add_argument("--lora-r", type=int, default=32)
     p.add_argument("--lora-alpha", type=int, default=64)
     return p
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def nonempty_line_count(path: pathlib.Path) -> int:
+    with path.open("rb") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def verify_dataset_manifest(manifest_path: pathlib.Path) -> dict:
+    """Verify immutable dataset digests before any model weights are loaded."""
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("schema") != "star-model-dataset-manifest/v1":
+        raise RuntimeError("unsupported or missing dataset manifest schema")
+
+    root = manifest_path.resolve().parent
+    verified = 0
+    for item in manifest.get("files", []):
+        name = item.get("path")
+        if not isinstance(name, str) or pathlib.PurePosixPath(name).name != name:
+            raise RuntimeError(f"unsafe dataset path in manifest: {name!r}")
+        path = root / name
+        if not path.is_file():
+            raise RuntimeError(f"dataset file missing: {name}")
+        actual_sha = sha256_file(path)
+        expected_sha = item.get("sha256")
+        if actual_sha != expected_sha:
+            raise RuntimeError(
+                f"dataset digest mismatch for {name}: expected {expected_sha}, got {actual_sha}"
+            )
+        expected_examples = item.get("examples")
+        if expected_examples is not None:
+            actual_examples = nonempty_line_count(path)
+            if actual_examples != expected_examples:
+                raise RuntimeError(
+                    f"dataset row-count mismatch for {name}: "
+                    f"expected {expected_examples}, got {actual_examples}"
+                )
+        verified += 1
+
+    if verified < 3:
+        raise RuntimeError("dataset manifest must verify train, validation, and test files")
+    return manifest
 
 
 def render_messages(tokenizer, messages: list[dict]) -> str:
@@ -85,6 +136,7 @@ def tokenize_dataset(dataset, tokenizer, max_seq_length: int):
 
 def main() -> None:
     args = args_parser().parse_args()
+    manifest = verify_dataset_manifest(pathlib.Path(args.manifest))
     output = pathlib.Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -177,6 +229,11 @@ def main() -> None:
         json.dumps(
             {
                 "base_model": args.base_model,
+                "dataset": {
+                    "name": manifest.get("name"),
+                    "examples": manifest.get("examples"),
+                    "schema": manifest.get("schema"),
+                },
                 "method": "qlora",
                 "quantization": "nf4-double-quant",
                 "compute_dtype": str(compute_dtype),
