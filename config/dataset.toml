@@ -11,11 +11,11 @@ exclude_globs = ["**/.git/**", "**/node_modules/**", "**/vendor/**", "**/dist/**
 
 [[tasks]]
 name = "code"
-weight = 0.24
+weight = 0.20
 
 [[tasks]]
 name = "prolog"
-weight = 0.14
+weight = 0.12
 
 [[tasks]]
 name = "starintel-prolog-synthetic"
@@ -39,19 +39,27 @@ weight = 0.04
 
 [[tasks]]
 name = "osint-tool-design"
-weight = 0.07
+weight = 0.06
+
+[[tasks]]
+name = "osint-skill-design"
+weight = 0.06
+
+[[tasks]]
+name = "starintel-tool-design"
+weight = 0.06
 
 [[tasks]]
 name = "independent-research"
-weight = 0.07
+weight = 0.05
 
 [[tasks]]
 name = "document-generation"
-weight = 0.045
+weight = 0.03
 
 [[tasks]]
 name = "actor-system-generation"
-weight = 0.045
+weight = 0.03
 
 [synthesis]
 actor = "star://llm.starintel.actor"
