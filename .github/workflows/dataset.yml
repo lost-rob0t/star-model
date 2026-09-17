@@ -94,7 +94,10 @@ jobs:
                 "tool-calling",
                 "ingest-jobs",
                 "migrations",
-                "osint-tool-design"
+                "osint-tool-design",
+                "independent-research",
+                "document-generation",
+                "actor-system-generation"
               ],
               teacher:{policy:"stronger-than-target",provider_policy:"cheapest-allowed"},
               requirements:{provenance:true,content_hash:true,reject_secrets:true}
