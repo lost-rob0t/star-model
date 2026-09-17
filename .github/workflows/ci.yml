@@ -1,37 +1,106 @@
 name: ci
 
 on:
-  pull_request:
   push:
-    branches: [main]
+  pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  python:
+  dataset-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compile scripts
-        run: python -m compileall -q scripts tests
+      - name: Compile Python entry points
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            scripts/star_dataset.py \
+            scripts/validate_mix.py \
+            scripts/request_synthesis.py \
+            scripts/synthesize_brave.py \
+            scripts/evolve_finetune.py \
+            scripts/train_tool_router.py \
+            trainer/train_qlora.py \
+            tests/test_evolution.py \
+            tests/test_synthesis.py
       - name: Unit tests
         run: python -m unittest discover -s tests -v
+      - name: Build and validate a tiny public-code corpus
+        run: |
+          set -euo pipefail
+          mkdir -p fixture
+          git -C fixture init
+          git -C fixture config user.email ci@example.invalid
+          git -C fixture config user.name star-model-ci
+          cat > fixture/LICENSE <<'EOF'
+          MIT License
+          EOF
+          cat > fixture/example.pl <<'EOF'
+          person(alice).
+          person(bob).
+          follows(alice, bob).
+          follows(bob, alice).
+          mutual(A, B) :- follows(A, B), follows(B, A).
+          connected(A, B) :- mutual(A, B).
+          query_person(Name) :- person(Name).
+          query_mutual(A, B) :- mutual(A, B).
+          % Padding keeps this fixture large enough to exercise deterministic source chunking.
+          explanation(this_fixture_models_a_small_social_graph_for_training_pipeline_validation).
+          explanation(the_completion_target_is_grounded_in_the_real_suffix_of_this_file).
+          explanation(no_teacher_model_or_network_call_is_required_for_this_smoke_test).
+          EOF
+          git -C fixture add LICENSE example.pl
+          git -C fixture commit -m fixture
+
+          python scripts/star_dataset.py build \
+            --repo fixture \
+            --repository fixture/prolog \
+            --output out/public.jsonl
+          test -s out/public.jsonl
+
+          python scripts/validate_mix.py \
+            --input out/public.jsonl \
+            --output-dir dataset
+
+          python scripts/star_dataset.py manifest \
+            --name ci-fixture \
+            --output dataset/manifest.json \
+            dataset/train.jsonl dataset/validation.jsonl dataset/test.jsonl
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          rows = [json.loads(line) for line in Path("out/public.jsonl").read_text().splitlines() if line]
+          assert rows, "fixture generated no examples"
+          assert all(row["task"] == "prolog" for row in rows)
+          assert all(row["provenance"]["license"] == "MIT" for row in rows)
+          manifest = json.loads(Path("dataset/manifest.json").read_text())
+          assert manifest["schema"] == "star-model-dataset-manifest/v1"
+          assert len(manifest["files"]) == 3
+          print({"examples": len(rows), "manifest_examples": manifest["examples"]})
+          PY
       - name: Seed evolution population
         run: |
+          set -euo pipefail
           python scripts/evolve_finetune.py seed --output-dir /tmp/evolution/g000
           test "$(find /tmp/evolution/g000 -name 'candidate-*.json' | wc -l)" -eq 6
       - name: Check configured task weights
         run: |
           python - <<'PY'
-          import pathlib, tomllib
-          cfg = tomllib.loads(pathlib.Path('config/dataset.toml').read_text())
-          total = sum(float(item['weight']) for item in cfg['tasks'])
+          import pathlib
+          import tomllib
+
+          dataset = tomllib.loads(pathlib.Path("config/dataset.toml").read_text())
+          total = sum(float(item["weight"]) for item in dataset["tasks"])
           assert abs(total - 1.0) < 1e-9, total
-          evo = tomllib.loads(pathlib.Path('config/evolution.toml').read_text())
-          mix = sum(float(v) for v in evo['dataset_mix'].values())
+
+          evolution = tomllib.loads(pathlib.Path("config/evolution.toml").read_text())
+          mix = sum(float(value) for value in evolution["dataset_mix"].values())
           assert abs(mix - 1.0) < 1e-9, mix
           PY
