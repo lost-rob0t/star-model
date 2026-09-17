@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
-"""Build and validate StarIntel fine-tuning datasets.
-
-The builder intentionally emits task-shaped examples instead of treating whole
-repositories as chat transcripts. Synthetic generation and training are owned by
-llm.starintel.actor; this program produces manifests and requests for that actor.
-"""
+"""Build StarIntel task corpora and actor fine-tune requests."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import os
 import pathlib
 import random
 import re
 import subprocess
-import sys
 from dataclasses import dataclass
 from typing import Iterable, Iterator
 
@@ -60,15 +53,16 @@ def git(repo: pathlib.Path, *args: str) -> str:
 def repository_license(repo: pathlib.Path) -> str:
     for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"):
         p = repo / name
-        if p.exists():
-            first = p.read_text(errors="replace")[:4096].lower()
-            if "apache" in first:
-                return "Apache-2.0"
-            if "mit license" in first:
-                return "MIT"
-            if "gnu general public license" in first:
-                return "GPL"
-            return "SEE-LICENSE-FILE"
+        if not p.exists():
+            continue
+        first = p.read_text(errors="replace")[:4096].lower()
+        if "apache" in first:
+            return "Apache-2.0"
+        if "mit license" in first:
+            return "MIT"
+        if "gnu general public license" in first:
+            return "GPL"
+        return "SEE-LICENSE-FILE"
     return "UNKNOWN"
 
 
@@ -88,36 +82,6 @@ def iter_sources(root: pathlib.Path, repository: str) -> Iterator[Source]:
         yield Source(repository, commit, license_name, str(path.relative_to(root)), text)
 
 
-def code_tasks(source: Source) -> Iterable[dict]:
-    language = pathlib.Path(source.path).suffix.lstrip(".") or "text"
-    chunks = chunk_text(source.text, 12000)
-    for index, chunk in enumerate(chunks):
-        prompt = (
-            f"You are working in public repository {source.repository}. "
-            f"Analyze this {language} source from {source.path}. Explain its behavior, "
-            "important invariants, likely integration points, and one concrete maintenance task.\n\n"
-            f"```{language}\n{chunk}\n```"
-        )
-        answer = (
-            "Source example retained for supervised task synthesis. A teacher model should "
-            "replace this placeholder with a grounded answer before the record enters the final SFT mix."
-        )
-        yield example(
-            task="prolog" if language in {"pl", "pro"} else "code",
-            prompt=prompt,
-            answer=answer,
-            provenance={
-                "kind": "public-prolog" if language in {"pl", "pro"} else "public-repository",
-                "repository": source.repository,
-                "path": source.path,
-                "commit": source.commit,
-                "license": source.license,
-                "chunk": index,
-            },
-            metadata={"language": language, "needs_teacher": True},
-        )
-
-
 def chunk_text(text: str, size: int) -> list[str]:
     lines = text.splitlines()
     out: list[str] = []
@@ -133,6 +97,42 @@ def chunk_text(text: str, size: int) -> list[str]:
     if current:
         out.append("\n".join(current))
     return out
+
+
+def code_tasks(source: Source) -> Iterable[dict]:
+    """Create grounded prefix->suffix tasks directly from public source.
+
+    Higher-level repair/explain/refactor examples are generated separately by the
+    teacher actor. This slice never contains invented answers.
+    """
+    language = pathlib.Path(source.path).suffix.lstrip(".") or "text"
+    for index, chunk in enumerate(chunk_text(source.text, 12000)):
+        lines = chunk.splitlines()
+        if len(lines) < 4 or len(chunk) < 256:
+            continue
+        cut = max(2, min(len(lines) - 1, int(len(lines) * 0.70)))
+        prefix = "\n".join(lines[:cut])
+        suffix = "\n".join(lines[cut:])
+        prompt = (
+            f"Continue the following {language} source from public repository "
+            f"{source.repository}, path {source.path}. Preserve the existing style and "
+            "return only the continuation.\n\n"
+            f"```{language}\n{prefix}\n```"
+        )
+        yield example(
+            task="prolog" if language in {"pl", "pro"} else "code",
+            prompt=prompt,
+            answer=suffix,
+            provenance={
+                "kind": "public-prolog" if language in {"pl", "pro"} else "public-repository",
+                "repository": source.repository,
+                "path": source.path,
+                "commit": source.commit,
+                "license": source.license,
+                "chunk": index,
+            },
+            metadata={"language": language, "objective": "grounded-continuation"},
+        )
 
 
 def example(*, task: str, prompt: str, answer: str, provenance: dict, metadata: dict | None = None) -> dict:
@@ -185,7 +185,7 @@ def manifest(args: argparse.Namespace) -> None:
         blob = path.read_bytes()
         count = sum(1 for line in blob.splitlines() if line.strip())
         total += count
-        files.append({"path": str(path), "sha256": hashlib.sha256(blob).hexdigest(), "examples": count})
+        files.append({"path": path.name, "sha256": hashlib.sha256(blob).hexdigest(), "examples": count})
     body = {
         "schema": "star-model-dataset-manifest/v1",
         "name": args.name,
@@ -193,6 +193,13 @@ def manifest(args: argparse.Namespace) -> None:
         "files": files,
         "training_controller": "star://llm.starintel.actor",
     }
+    if args.artifact_repository and args.artifact_run_id and args.artifact_name:
+        body["artifact"] = {
+            "kind": "github-actions-artifact",
+            "repository": args.artifact_repository,
+            "run_id": args.artifact_run_id,
+            "name": args.artifact_name,
+        }
     pathlib.Path(args.output).write_text(json.dumps(body, indent=2, sort_keys=True) + "\n")
 
 
@@ -212,7 +219,8 @@ def actor_request(args: argparse.Namespace) -> None:
         },
         "provider_policy": {
             "inference": "cheapest-allowed",
-            "gpu": "cheapest-compatible",
+            "gpu": "vast-ai",
+            "gpu_ram_gb_min": args.gpu_ram_gb_min,
             "max_hourly_gpu_usd": args.max_hourly_gpu_usd,
             "max_total_gpu_usd": args.max_total_gpu_usd,
         },
@@ -232,6 +240,9 @@ def parser() -> argparse.ArgumentParser:
 
     m = sub.add_parser("manifest")
     m.add_argument("--name", default="star-model-corpus")
+    m.add_argument("--artifact-repository")
+    m.add_argument("--artifact-run-id")
+    m.add_argument("--artifact-name")
     m.add_argument("--output", required=True)
     m.add_argument("inputs", nargs="+")
     m.set_defaults(fn=manifest)
@@ -240,6 +251,7 @@ def parser() -> argparse.ArgumentParser:
     a.add_argument("--manifest", required=True)
     a.add_argument("--base-model", required=True)
     a.add_argument("--max-seq-length", type=int, default=8192)
+    a.add_argument("--gpu-ram-gb-min", type=int, default=24)
     a.add_argument("--max-hourly-gpu-usd", type=float, default=2.0)
     a.add_argument("--max-total-gpu-usd", type=float, default=20.0)
     a.add_argument("--output", required=True)
