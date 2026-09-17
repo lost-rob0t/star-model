@@ -1,0 +1,68 @@
+version = 1
+name = "star-model-corpus"
+seed = 545
+
+[sources]
+include_public_repositories = true
+include_private_repositories = false
+require_license_metadata = true
+max_file_bytes = 1000000
+exclude_globs = ["**/.git/**", "**/node_modules/**", "**/vendor/**", "**/dist/**", "**/build/**", "**/*.min.js", "**/*.lock"]
+
+[[tasks]]
+name = "code"
+weight = 0.30
+
+[[tasks]]
+name = "prolog"
+weight = 0.18
+
+[[tasks]]
+name = "starintel-prolog-synthetic"
+weight = 0.12
+
+[[tasks]]
+name = "starintel-json-synthetic"
+weight = 0.10
+
+[[tasks]]
+name = "tool-calling"
+weight = 0.12
+
+[[tasks]]
+name = "ingest-jobs"
+weight = 0.06
+
+[[tasks]]
+name = "migrations"
+weight = 0.06
+
+[[tasks]]
+name = "osint-tool-design"
+weight = 0.06
+
+[synthesis]
+actor = "star://llm.starintel.actor"
+teacher_model = "configurable"
+max_examples_per_run = 10000
+max_cost_usd = 25.0
+concurrency = 8
+
+[validation]
+dedupe = true
+near_dedupe = true
+reject_secrets = true
+reject_binary = true
+reject_missing_provenance = true
+train_fraction = 0.96
+validation_fraction = 0.02
+test_fraction = 0.02
+
+[training]
+controller = "star://llm.starintel.actor"
+base_model = "configurable"
+method = "qlora"
+precision = "bf16"
+max_seq_length = 8192
+packing = true
+publish_adapter_only = true
