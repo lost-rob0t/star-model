@@ -395,7 +395,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
     count = max(1, min(count, int(cfg["output"].get("max_examples_per_teacher_call", 8))))
     prompt_version = str(cfg["teacher"].get("prompt_version", "brave-synth-v1"))
     jobs = list(iter_seed_jobs(cfg, args.family))
-    random.Random(int(cfg.get("seed", 545))).shuffle(jobs)
+    random.Random(int(cfg.get("random_seed", 545))).shuffle(jobs)
     if args.max_jobs is not None:
         jobs = jobs[: max(0, args.max_jobs)]
 
