@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://starintel.actor/schema/star-model-dataset-manifest-v1.json",
+  "title": "Star Model Dataset Manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "name",
+    "created_at",
+    "examples",
+    "task_counts",
+    "split_counts",
+    "artifact"
+  ],
+  "properties": {
+    "schema": {
+      "const": "star-model-dataset-manifest/v1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "examples": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "task_counts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "split_counts": {
+      "type": "object",
+      "properties": {
+        "train": {"type": "integer", "minimum": 0},
+        "validation": {"type": "integer", "minimum": 0},
+        "test": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
