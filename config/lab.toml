@@ -1,0 +1,55 @@
+version = 1
+
+[dataset]
+# The reservoir target is intentionally larger than any single training run.
+# Build it once, deduplicate it, then sample a versioned mixture for each run.
+include_complete_codebase = true
+synthetic_target_gib_per_task = 5
+synthetic_tasks = [
+  "code",
+  "prolog",
+  "starintel-prolog-synthetic",
+  "starintel-json-synthetic",
+  "tool-calling",
+  "ingest-jobs",
+  "migrations",
+  "osint-tool-design",
+  "osint-skill-design",
+  "starintel-tool-design",
+  "independent-research",
+  "document-generation",
+  "actor-system-generation",
+]
+# Do not blindly train over the entire reservoir. A run materializes a bounded,
+# quality-filtered sample from it and records that exact sample in the manifest.
+max_training_gib_per_task = 1.0
+min_quality_score = 0.80
+exclude_from_training = ["eval/**", "runs/**", ".lab/**", "out/**", "evolution/**"]
+
+[training]
+method = "qlora"
+precision = "bf16"
+max_seq_length = 4096
+packing = true
+adapter_only = true
+checkpoint_every_steps = 50
+
+[pi]
+package = "@earendil-works/pi-coding-agent"
+version = "0.83.0"
+tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
+
+[evaluation]
+repetitions = 1
+default_timeout_seconds = 900
+# Promotion is decided by prolog/eval_policy.pl, not by an LLM judge.
+min_pass_rate_delta = 0.0
+max_regressions = 0
+max_latency_ratio = 1.50
+
+[aws]
+# starintel-infra owns provisioning. This repository only stages immutable
+# source/data artifacts and consumes the resulting model artifact.
+source_archive_name = "star-model-source.tar.zst"
+dataset_prefix = "datasets"
+output_prefix = "training-runs"
