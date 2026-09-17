@@ -65,7 +65,7 @@ proc synthesize*(client: ActorClient; taskFamilies: seq[string]; maxExamples = 2
 
 proc startFineTune*(client: ActorClient; datasetManifest: JsonNode; baseModel: string;
                     maxHourlyGpuUsd = 0.80; maxTotalGpuUsd = 25.0;
-                    maxSeqLength = 8_192; method = "qlora";
+                    maxSeqLength = 8_192; trainingMethod = "qlora";
                     precision = "bf16"; packing = true;
                     publishAdapterOnly = true): JsonNode =
   let payload = %*{
@@ -74,7 +74,7 @@ proc startFineTune*(client: ActorClient; datasetManifest: JsonNode; baseModel: s
     "dataset": datasetManifest,
     "training": {
       "base_model": baseModel,
-      "method": method,
+      "method": trainingMethod,
       "precision": precision,
       "max_seq_length": maxSeqLength,
       "packing": packing,
