@@ -42,17 +42,19 @@ warmup_ratio = 0.03
 epochs = 2.0
 
 [dataset_mix]
-code = 0.15
-prolog = 0.10
-starintel_prolog_synthetic = 0.12
+code = 0.10
+prolog = 0.07
+starintel_prolog_synthetic = 0.10
 starintel_json_synthetic = 0.08
 tool_calling = 0.16
-ingest_jobs = 0.08
-migrations = 0.05
-osint_tool_design = 0.10
-independent_research = 0.08
-document_generation = 0.04
-actor_system_generation = 0.04
+ingest_jobs = 0.07
+migrations = 0.04
+osint_tool_design = 0.09
+osint_skill_design = 0.09
+starintel_tool_design = 0.09
+independent_research = 0.05
+document_generation = 0.03
+actor_system_generation = 0.03
 
 [services]
 training_endpoint = "/v1/fine-tunes"
