@@ -3,10 +3,14 @@ name: dataset
 on:
   workflow_dispatch:
     inputs:
-      synth_examples:
-        description: Maximum synthetic examples requested from llm.starintel.actor
+      synth_jobs:
+        description: Brave-grounded synthetic teacher calls to run
         required: false
-        default: "2000"
+        default: "20"
+      synth_examples_per_job:
+        description: Synthetic examples requested per teacher call (max 8)
+        required: false
+        default: "4"
       start_training:
         description: Submit a fine-tune request to llm.starintel.actor after validation
         type: boolean
@@ -85,41 +89,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Submit and collect synthetic corpus from llm.starintel.actor
+      - name: Generate Brave-grounded synthetic corpus
         env:
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
           STAR_LLM_ACTOR_URL: ${{ secrets.STAR_LLM_ACTOR_URL }}
           STAR_LLM_ACTOR_TOKEN: ${{ secrets.STAR_LLM_ACTOR_TOKEN }}
-          MAX_EXAMPLES: ${{ inputs.synth_examples || '2000' }}
+          STAR_SYNTH_MODEL: ${{ vars.STAR_SYNTH_MODEL }}
+          STAR_BRAVE_TRAINING_RIGHTS_ACK: ${{ vars.STAR_BRAVE_TRAINING_RIGHTS_ACK }}
+          SYNTH_JOBS: ${{ inputs.synth_jobs || '20' }}
+          SYNTH_EXAMPLES_PER_JOB: ${{ inputs.synth_examples_per_job || '4' }}
         shell: bash
         run: |
           set -euo pipefail
+          test -n "${BRAVE_SEARCH_API_KEY:-}" || { echo 'BRAVE_SEARCH_API_KEY is required'; exit 1; }
           test -n "${STAR_LLM_ACTOR_URL:-}" || { echo 'STAR_LLM_ACTOR_URL is required'; exit 1; }
           test -n "${STAR_LLM_ACTOR_TOKEN:-}" || { echo 'STAR_LLM_ACTOR_TOKEN is required'; exit 1; }
+          test -n "${STAR_SYNTH_MODEL:-}" || { echo 'STAR_SYNTH_MODEL repository variable is required'; exit 1; }
+          test "${STAR_BRAVE_TRAINING_RIGHTS_ACK:-}" = "1" || {
+            echo 'Set STAR_BRAVE_TRAINING_RIGHTS_ACK=1 only when the configured Brave plan permits this storage/training use.'
+            exit 1
+          }
           mkdir -p out
-          jq -n \
-            --argjson n "$MAX_EXAMPLES" \
-            '{
-              type:"llm.dataset.synthesize",
-              version:1,
-              corpus:"star-model",
-              max_examples:$n,
-              task_families:[
-                "starintel-prolog-synthetic",
-                "starintel-json-synthetic",
-                "tool-calling",
-                "ingest-jobs",
-                "migrations",
-                "osint-tool-design"
-              ],
-              teacher:{policy:"stronger-than-target",provider_policy:"cheapest-allowed"},
-              requirements:{provenance:true,content_hash:true,reject_secrets:true}
-            }' > request.json
-
-          python scripts/request_synthesis.py \
-            --url "$STAR_LLM_ACTOR_URL" \
-            --token "$STAR_LLM_ACTOR_TOKEN" \
-            --request request.json \
-            --output out/synthetic.jsonl
+          python scripts/synthesize_brave.py generate \
+            --output out/synthetic.jsonl \
+            --max-jobs "$SYNTH_JOBS" \
+            --examples-per-seed "$SYNTH_EXAMPLES_PER_JOB"
+          test -s out/synthetic.jsonl
       - uses: actions/upload-artifact@v4
         with:
           name: corpus-synthetic

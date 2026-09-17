@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://starintel.actor/schema/star-model-benchmark-trace-v1.json",
+  "title": "Star Model Evolution Benchmark Trace",
+  "type": "object",
+  "required": ["candidate_id", "task_family", "accepted"],
+  "properties": {
+    "candidate_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string"},
+    "task_family": {
+      "type": "string",
+      "enum": [
+        "independent-research",
+        "document-generation",
+        "osint-tool-design",
+        "osint-skill-design",
+        "starintel-tool-design",
+        "actor-system-generation",
+        "tool-calling",
+        "ingest-jobs"
+      ]
+    },
+    "accepted": {"type": "boolean"},
+    "artifact_count": {"type": "integer", "minimum": 0},
+    "quality": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "grounded": {"type": "boolean"},
+    "independent": {"type": "boolean"},
+    "tests_passed": {"type": "boolean"},
+    "tool_correct": {"type": "boolean"},
+    "ingest_success": {"type": "boolean"},
+    "cost_usd": {"type": "number", "minimum": 0.0},
+    "latency_ms": {"type": "number", "minimum": 0.0},
+    "input": {"type": "string"},
+    "feedback": {"type": "string"},
+    "error": {"type": "string"},
+    "artifacts": {"type": "array"},
+    "provenance": {"type": "object"}
+  },
+  "additionalProperties": true
+}

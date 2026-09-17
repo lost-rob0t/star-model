@@ -1,0 +1,71 @@
+version = 1
+seed = 545
+population = 6
+elite = 2
+children_per_elite = 2
+
+[objectives]
+# Accepted, independently completed artifacts are the primary fitness signal.
+research_yield = 0.35
+document_yield = 0.25
+actor_system_yield = 0.25
+tool_call_accuracy = 0.10
+ingest_success_rate = 0.05
+
+[gates]
+require_research_grounding = true
+require_research_independent = true
+require_actor_tests = true
+min_quality = 0.70
+
+[mutation]
+dataset_weight_sigma = 0.20
+learning_rate_sigma = 0.25
+lora_rank_choices = [8, 16, 32, 64]
+lora_alpha_choices = [16, 32, 64, 128]
+dropout_min = 0.0
+dropout_max = 0.15
+warmup_min = 0.01
+warmup_max = 0.12
+
+[training]
+method = "qlora"
+precision = "bf16"
+max_seq_length = 8192
+packing = true
+publish_adapter_only = true
+learning_rate = 0.0002
+lora_rank = 32
+lora_alpha = 64
+lora_dropout = 0.05
+warmup_ratio = 0.03
+epochs = 2.0
+
+[dataset_mix]
+code = 0.10
+prolog = 0.07
+starintel_prolog_synthetic = 0.10
+starintel_json_synthetic = 0.08
+tool_calling = 0.16
+ingest_jobs = 0.07
+migrations = 0.04
+osint_tool_design = 0.09
+osint_skill_design = 0.09
+starintel_tool_design = 0.09
+independent_research = 0.05
+document_generation = 0.03
+actor_system_generation = 0.03
+
+[services]
+training_endpoint = "/v1/fine-tunes"
+synthesis_endpoint = "/v1/dataset/synthesize"
+starintel_bulk_ingest_endpoint = "/api/v1/documents/bulk"
+starintel_dataset = "star-model-evolution"
+starintel_schema_version = "0.9.0"
+
+[router]
+enabled = true
+feature_buckets = 4096
+hidden_dim = 128
+epochs = 12
+learning_rate = 0.001
