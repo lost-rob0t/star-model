@@ -1,5 +1,5 @@
 version = 1
-seed = 545
+random_seed = 545
 examples_per_seed = 4
 
 [brave]
