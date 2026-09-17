@@ -18,6 +18,9 @@ TASKS = {
     "ingest-jobs",
     "migrations",
     "osint-tool-design",
+    "independent-research",
+    "document-generation",
+    "actor-system-generation",
 }
 SPLITS = {"train", "validation", "test"}
 
