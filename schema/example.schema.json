@@ -16,7 +16,10 @@
         "tool-calling",
         "ingest-jobs",
         "migrations",
-        "osint-tool-design"
+        "osint-tool-design",
+        "independent-research",
+        "document-generation",
+        "actor-system-generation"
       ]
     },
     "messages": {
