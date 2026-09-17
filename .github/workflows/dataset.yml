@@ -25,16 +25,27 @@ jobs:
     outputs:
       matrix: ${{ steps.repos.outputs.matrix }}
     steps:
-      - name: Inventory public repositories
+      - uses: actions/checkout@v4
+      - name: Inventory all configured public repositories
         id: repos
         env:
           GH_TOKEN: ${{ github.token }}
-          OWNER: ${{ github.repository_owner }}
         shell: bash
         run: |
           set -euo pipefail
-          repos="$(gh api --paginate "/users/${OWNER}/repos?type=public&per_page=100" \
-            --jq '[.[] | select(.fork == false and .archived == false) | {name: .full_name, clone_url: .clone_url}]')"
+          : > repos.ndjson
+          while IFS= read -r owner; do
+            gh api --paginate "/users/${owner}/repos?type=public&per_page=100" \
+              --jq '.[] | select(.fork == false and .archived == false) | {name: .full_name, clone_url: .clone_url}' \
+              >> repos.ndjson
+          done < <(jq -r '.owners[]' config/repositories.json)
+
+          jq -c '.extra_repositories[]? | {
+            name: .name,
+            clone_url: (.clone_url // ("https://github.com/" + .name + ".git"))
+          }' config/repositories.json >> repos.ndjson
+
+          repos="$(jq -sc 'unique_by(.name)' repos.ndjson)"
           printf 'matrix=%s\n' "$(jq -cn --argjson repos "$repos" '{include:$repos}')" >> "$GITHUB_OUTPUT"
 
   harvest:
