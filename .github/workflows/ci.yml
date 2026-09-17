@@ -22,7 +22,14 @@ jobs:
             scripts/star_dataset.py \
             scripts/validate_mix.py \
             scripts/request_synthesis.py \
-            trainer/train_qlora.py
+            scripts/synthesize_brave.py \
+            scripts/evolve_finetune.py \
+            scripts/train_tool_router.py \
+            trainer/train_qlora.py \
+            tests/test_evolution.py \
+            tests/test_synthesis.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
       - name: Build and validate a tiny public-code corpus
         run: |
           set -euo pipefail
@@ -77,4 +84,23 @@ jobs:
           assert manifest["schema"] == "star-model-dataset-manifest/v1"
           assert len(manifest["files"]) == 3
           print({"examples": len(rows), "manifest_examples": manifest["examples"]})
+          PY
+      - name: Seed evolution population
+        run: |
+          set -euo pipefail
+          python scripts/evolve_finetune.py seed --output-dir /tmp/evolution/g000
+          test "$(find /tmp/evolution/g000 -name 'candidate-*.json' | wc -l)" -eq 6
+      - name: Check configured task weights
+        run: |
+          python - <<'PY'
+          import pathlib
+          import tomllib
+
+          dataset = tomllib.loads(pathlib.Path("config/dataset.toml").read_text())
+          total = sum(float(item["weight"]) for item in dataset["tasks"])
+          assert abs(total - 1.0) < 1e-9, total
+
+          evolution = tomllib.loads(pathlib.Path("config/evolution.toml").read_text())
+          mix = sum(float(value) for value in evolution["dataset_mix"].values())
+          assert abs(mix - 1.0) < 1e-9, mix
           PY
