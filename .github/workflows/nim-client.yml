@@ -1,0 +1,26 @@
+name: nim-client
+
+on:
+  push:
+    paths:
+      - "src/**/*.nim"
+      - "tests/**/*.nim"
+      - "star_model.nimble"
+      - ".github/workflows/nim-client.yml"
+  pull_request:
+    paths:
+      - "src/**/*.nim"
+      - "tests/**/*.nim"
+      - "star_model.nimble"
+      - ".github/workflows/nim-client.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: nimlang/nim:2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run corpus tests
+        run: nim c --path:src -r tests/test_corpus.nim
+      - name: Compile public module
+        run: nim c --path:src --compileOnly src/starmodel.nim
