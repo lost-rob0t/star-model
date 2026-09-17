@@ -1,6 +1,6 @@
 version = 1
 seed = 545
-examples_per_seed = 3
+examples_per_seed = 4
 
 [brave]
 endpoint = "https://api.search.brave.com/res/v1/llm/context"
@@ -28,20 +28,20 @@ max_examples_per_teacher_call = 8
 
 [[seed]]
 topic = "public-source DNS, RDAP, certificate-transparency and website metadata research workflows"
-families = ["independent-research", "osint-tool-design", "tool-calling"]
+families = ["independent-research", "osint-tool-design", "osint-skill-design", "tool-calling"]
 
 [[seed]]
 topic = "public software vulnerability advisories, package metadata, release notes and fix verification"
-families = ["independent-research", "document-generation", "tool-calling"]
+families = ["independent-research", "osint-skill-design", "document-generation", "tool-calling"]
 
 [[seed]]
 topic = "StarIntel document ingestion, provenance, relations, actor manifests and typed transformations"
-families = ["starintel-json-synthetic", "ingest-jobs", "actor-system-generation"]
+families = ["starintel-json-synthetic", "starintel-tool-design", "ingest-jobs", "actor-system-generation"]
 
 [[seed]]
 topic = "Common Lisp and actor-model service design for bounded concurrent research pipelines"
-families = ["actor-system-generation", "document-generation", "tool-calling"]
+families = ["actor-system-generation", "starintel-tool-design", "document-generation", "tool-calling"]
 
 [[seed]]
 topic = "Prolog rules for provenance validation, entity relations, workflow constraints and result verification"
-families = ["starintel-prolog-synthetic", "actor-system-generation", "document-generation"]
+families = ["starintel-prolog-synthetic", "starintel-tool-design", "actor-system-generation", "document-generation"]
