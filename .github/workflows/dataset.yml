@@ -82,7 +82,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Request synthetic corpus from llm.starintel.actor
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Submit and collect synthetic corpus from llm.starintel.actor
         env:
           STAR_LLM_ACTOR_URL: ${{ secrets.STAR_LLM_ACTOR_URL }}
           STAR_LLM_ACTOR_TOKEN: ${{ secrets.STAR_LLM_ACTOR_TOKEN }}
@@ -111,11 +114,12 @@ jobs:
               teacher:{policy:"stronger-than-target",provider_policy:"cheapest-allowed"},
               requirements:{provenance:true,content_hash:true,reject_secrets:true}
             }' > request.json
-          curl --fail-with-body --retry 4 --retry-all-errors \
-            -H "Authorization: Bearer ${STAR_LLM_ACTOR_TOKEN}" \
-            -H 'Content-Type: application/json' \
-            --data-binary @request.json \
-            "${STAR_LLM_ACTOR_URL%/}/v1/dataset/synthesize" > out/synthetic.jsonl
+
+          python scripts/request_synthesis.py \
+            --url "$STAR_LLM_ACTOR_URL" \
+            --token "$STAR_LLM_ACTOR_TOKEN" \
+            --request request.json \
+            --output out/synthetic.jsonl
       - uses: actions/upload-artifact@v4
         with:
           name: corpus-synthetic
