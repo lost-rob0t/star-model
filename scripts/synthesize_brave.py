@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Generate grounded synthetic StarIntel training data using Brave Search.
-
-The generator uses Brave's LLM Context API for public-web grounding and an
-OpenAI-compatible teacher (normally llm.starintel.actor) for synthesis. Raw Brave
-snippets are not written to the training JSONL; source URLs, titles, hostnames,
-query metadata, and a context hash are retained for auditability.
-"""
+"""Generate Brave-grounded synthetic fine-tuning data for StarIntel."""
 
 from __future__ import annotations
 
@@ -40,53 +34,31 @@ ALLOWED_TASKS = {
     "document-generation",
     "actor-system-generation",
 }
-
 FAMILY_GUIDANCE = {
-    "independent-research": (
-        "Create research tasks and high-quality answers that synthesize multiple supplied public sources, "
-        "separate established facts from hypotheses, preserve URLs, and name unresolved questions."
-    ),
-    "osint-tool-design": (
-        "Design lawful public-source research tools with explicit inputs/outputs, provenance, rate limits, "
-        "failure behavior, tests, and a bounded implementation sketch. Do not design credential theft, "
-        "unauthorized access, evasion, or invasive collection."
-    ),
-    "osint-skill-design": (
-        "Design reusable OSINT agent skills for public information: trigger conditions, allowed tools, search "
-        "strategy, evidence requirements, stopping rules, provenance, and deterministic verification checks."
-    ),
-    "starintel-tool-design": (
-        "Design StarIntel-native tools that read or emit typed documents, use canonical ingest/search APIs, "
-        "preserve provenance, define schemas, and include test vectors and error handling."
-    ),
-    "tool-calling": (
-        "Create tool-calling conversations where tool choice and JSON arguments are unambiguous. Include the "
-        "tool schemas and realistic tool results before the assistant synthesis."
-    ),
-    "ingest-jobs": (
-        "Create StarIntel ingest tasks covering validation, bounded bulk writes, idempotency, provenance, "
-        "retries, partial failures, and repair."
-    ),
-    "migrations": (
-        "Create data-model migration tasks with before/after examples, invariants, rollback strategy, and "
-        "validation checks."
-    ),
-    "starintel-json-synthetic": (
-        "Create synthetic StarIntel JSON/JSON-LD documents and transformations with canonical field spelling, "
-        "provenance, relations, and schema-focused validation examples."
-    ),
-    "starintel-prolog-synthetic": (
-        "Create Prolog facts, rules, queries, and verification tasks around provenance, actor routing, document "
-        "constraints, and research workflows. Include expected query behavior."
-    ),
-    "document-generation": (
-        "Create document-production tasks that result in a complete report/spec/runbook plus objective checks "
-        "for structure, factual grounding, provenance, and completeness."
-    ),
-    "actor-system-generation": (
-        "Create actor-system implementation tasks with message contracts, supervision/failure semantics, "
-        "bounded concurrency, runnable tests, and StarIntel ingest/provenance integration."
-    ),
+    "independent-research": "Produce evidence-backed research with source URLs, uncertainty, and unresolved questions.",
+    "osint-tool-design": "Design lawful public-source OSINT tools with schemas, provenance, rate limits, errors, and tests.",
+    "osint-skill-design": "Design reusable public-source research skills with triggers, tools, search strategy, evidence rules, and stopping criteria.",
+    "starintel-tool-design": "Design StarIntel-native tools using typed documents, canonical APIs, provenance, test vectors, and explicit failures.",
+    "tool-calling": "Produce real tool-call conversations with tool schemas, strict JSON arguments, tool results, and final synthesis.",
+    "ingest-jobs": "Produce ingest tasks covering validation, bounded bulk writes, idempotency, retries, partial failure, and repair.",
+    "migrations": "Produce migrations with before/after examples, invariants, validation, compatibility, and rollback.",
+    "starintel-json-synthetic": "Produce synthetic StarIntel JSON/JSON-LD documents and typed transformations with provenance.",
+    "starintel-prolog-synthetic": "Produce Prolog facts, rules, queries, and verification tasks for provenance and actor workflows.",
+    "document-generation": "Produce complete report/spec/runbook tasks with objective structure, grounding, and completeness checks.",
+    "actor-system-generation": "Produce actor-system tasks with message contracts, supervision, bounded concurrency, ingest integration, and runnable tests.",
+}
+QUERY_SUFFIX = {
+    "independent-research": "primary sources documentation evidence verification",
+    "osint-tool-design": "public source OSINT tool API provenance rate limits",
+    "osint-skill-design": "OSINT research workflow evidence provenance search skill",
+    "starintel-tool-design": "StarIntel tools document ingest actor provenance API",
+    "tool-calling": "API tool schema examples documentation",
+    "ingest-jobs": "document ingest bulk validation retry idempotency",
+    "migrations": "schema migration compatibility validation rollback",
+    "starintel-json-synthetic": "JSON schema provenance document examples",
+    "starintel-prolog-synthetic": "Prolog rules provenance validation actor workflow",
+    "document-generation": "technical report specification runbook evidence",
+    "actor-system-generation": "actor model supervision message passing bounded concurrency",
 }
 
 
@@ -103,13 +75,14 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def stable_split(digest: str) -> str:
-    n = int(digest[:8], 16) / 0xFFFFFFFF
-    if n < 0.96:
-        return "train"
-    if n < 0.98:
-        return "validation"
-    return "test"
+def stable_split(value: str) -> str:
+    n = int(value[:8], 16) / 0xFFFFFFFF
+    return "train" if n < 0.96 else "validation" if n < 0.98 else "test"
+
+
+def bounded_query(value: str) -> str:
+    words = value.split()[:75]
+    return " ".join(words)[:600]
 
 
 def post_json(
@@ -120,20 +93,20 @@ def post_json(
     timeout: int,
     retries: int = 4,
 ) -> dict[str, Any]:
+    request_headers = {"Accept": "application/json", "Content-Type": "application/json", **headers}
     body = canonical_json(payload).encode("utf-8")
-    request_headers = {"Content-Type": "application/json", "Accept": "application/json", **headers}
     for attempt in range(retries):
         request = urllib.request.Request(url, data=body, headers=request_headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                raw = response.read().decode("utf-8")
-            value = json.loads(raw)
+                value = json.loads(response.read().decode("utf-8"))
             if not isinstance(value, dict):
                 raise RuntimeError(f"POST {url}: expected JSON object")
             return value
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            if exc.code not in {408, 409, 425, 429, 500, 502, 503, 504} or attempt + 1 >= retries:
+            retryable = exc.code in {408, 409, 425, 429, 500, 502, 503, 504}
+            if not retryable or attempt + 1 >= retries:
                 raise RuntimeError(f"POST {url}: HTTP {exc.code}: {detail[:2000]}") from exc
         except urllib.error.URLError as exc:
             if attempt + 1 >= retries:
@@ -145,7 +118,7 @@ def post_json(
 def brave_context(query: str, cfg: dict[str, Any], api_key: str, timeout: int) -> dict[str, Any]:
     brave = cfg["brave"]
     payload = {
-        "q": query[:600],
+        "q": bounded_query(query),
         "country": brave.get("country", "US"),
         "search_lang": brave.get("search_lang", "en"),
         "count": int(brave.get("count", 20)),
@@ -159,7 +132,7 @@ def brave_context(query: str, cfg: dict[str, Any], api_key: str, timeout: int) -
     }
     return post_json(
         str(brave["endpoint"]),
-        {"X-Subscription-Token": api_key, "Accept-Encoding": "gzip"},
+        {"X-Subscription-Token": api_key},
         payload,
         timeout=timeout,
     )
@@ -167,48 +140,30 @@ def brave_context(query: str, cfg: dict[str, Any], api_key: str, timeout: int) -
 
 def extract_grounding(result: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     generic = result.get("grounding", {}).get("generic", [])
-    if not isinstance(generic, list):
-        generic = []
     sources = result.get("sources", {})
-    if not isinstance(sources, dict):
-        sources = {}
-    cleaned = []
+    generic = generic if isinstance(generic, list) else []
+    sources = sources if isinstance(sources, dict) else {}
+    out: list[dict[str, Any]] = []
     for item in generic:
         if not isinstance(item, dict):
             continue
         url = str(item.get("url", "")).strip()
-        title = str(item.get("title", "")).strip()
-        snippets = [str(s) for s in item.get("snippets", []) if str(s).strip()]
-        if not url or not snippets:
-            continue
-        cleaned.append({"url": url, "title": title, "snippets": snippets})
-    return cleaned, sources
-
-
-def grounding_text(items: list[dict[str, Any]], max_chars: int = 48000) -> str:
-    chunks: list[str] = []
-    used = 0
-    for index, item in enumerate(items, 1):
-        text = f"SOURCE {index}\nTITLE: {item['title']}\nURL: {item['url']}\n" + "\n".join(item["snippets"])
-        if used + len(text) > max_chars:
-            remaining = max_chars - used
-            if remaining > 400:
-                chunks.append(text[:remaining])
-            break
-        chunks.append(text)
-        used += len(text)
-    return "\n\n".join(chunks)
+        snippets = [str(x) for x in item.get("snippets", []) if str(x).strip()]
+        if url and snippets:
+            out.append({"url": url, "title": str(item.get("title", "")), "snippets": snippets})
+    return out, sources
 
 
 def source_metadata(items: list[dict[str, Any]], sources: dict[str, Any]) -> list[dict[str, str]]:
-    out = []
-    seen = set()
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
     for item in items:
         url = item["url"]
         if url in seen:
             continue
         seen.add(url)
-        meta = sources.get(url, {}) if isinstance(sources.get(url, {}), dict) else {}
+        meta = sources.get(url, {})
+        meta = meta if isinstance(meta, dict) else {}
         out.append(
             {
                 "url": url,
@@ -219,40 +174,43 @@ def source_metadata(items: list[dict[str, Any]], sources: dict[str, Any]) -> lis
     return out
 
 
-def teacher_prompt(topic: str, family: str, examples: int, grounded_text: str) -> str:
-    guidance = FAMILY_GUIDANCE[family]
-    return f"""You are generating supervised fine-tuning data for a StarIntel-focused model.
+def grounding_text(items: list[dict[str, Any]], max_chars: int = 48000) -> str:
+    chunks: list[str] = []
+    used = 0
+    for index, item in enumerate(items, 1):
+        chunk = f"SOURCE {index}\nTITLE: {item['title']}\nURL: {item['url']}\n" + "\n".join(item["snippets"])
+        if used + len(chunk) > max_chars:
+            if max_chars - used > 400:
+                chunks.append(chunk[: max_chars - used])
+            break
+        chunks.append(chunk)
+        used += len(chunk)
+    return "\n\n".join(chunks)
+
+
+def teacher_prompt(topic: str, family: str, count: int, context: str) -> str:
+    return f"""Generate supervised fine-tuning data for a StarIntel-focused model.
 
 TASK FAMILY: {family}
 TOPIC: {topic}
-NUMBER OF EXAMPLES: {examples}
+EXAMPLES: {count}
+GOAL: {FAMILY_GUIDANCE[family]}
 
-Goal:
-{guidance}
+Rules:
+- Factual outside-world claims may use only the supplied public-source context.
+- Never invent URLs, source titles, observations, tool results, or tests already run.
+- Synthetic code, actors, schemas, tool definitions, and hypothetical inputs are allowed when clearly synthetic.
+- Keep OSINT examples lawful, public-source, bounded, and non-invasive. No credential theft, unauthorized access, stalking workflows, malware deployment, or evasion instructions.
+- Prefer examples with objective validation checks.
+- StarIntel examples should preserve provenance, typed messages, bounded concurrency, idempotent ingest, and explicit failure behavior.
+- tool-calling examples MUST include a non-empty tools array, an assistant message with tool_calls, at least one tool-role response, and a final assistant synthesis.
+- independent-research answers MUST cite at least one exact URL from the supplied context.
 
-Grounding rules:
-- Use only the supplied public-source context for factual claims about the outside world.
-- Do not invent URLs, source titles, test results, commands already run, or observations not present below.
-- Synthetic code, schemas, actors, tool definitions, documents, and hypothetical inputs are allowed when clearly synthetic.
-- Keep public-source research lawful and non-invasive. Do not include secrets, private credentials, stalking workflows, credential theft, unauthorized access, malware deployment, or evasion instructions.
-- Prefer concrete tasks whose answer can be checked automatically.
-- For StarIntel examples, favor strict schemas, provenance, typed messages, bounded concurrency, idempotent ingest, and explicit failure handling.
-- For tool-calling, include a tools array and at least one assistant tool call plus tool response before the final assistant answer.
-
-Return ONLY one JSON object with this shape:
-{{
-  "examples": [
-    {{
-      "task": "{family}",
-      "messages": [{{"role":"user","content":"..."}}, {{"role":"assistant","content":"..."}}],
-      "tools": [],
-      "metadata": {{"quality_checks":["..."], "skills":["..."]}}
-    }}
-  ]
-}}
+Return ONLY JSON:
+{{"examples":[{{"task":"{family}","messages":[{{"role":"user","content":"..."}},{{"role":"assistant","content":"..."}}],"tools":[],"metadata":{{"quality_checks":["..."],"skills":["..."]}}}}]}}
 
 PUBLIC-SOURCE CONTEXT:
-{grounded_text}
+{context}
 """
 
 
@@ -265,20 +223,19 @@ def teacher_completion(
     timeout: int,
 ) -> dict[str, Any]:
     teacher = cfg["teacher"]
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "Return strict JSON only. You are a synthetic-data generator, not a conversational assistant."},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": float(teacher.get("temperature", 0.45)),
-        "max_tokens": int(teacher.get("max_tokens", 8192)),
-    }
     endpoint = str(teacher.get("endpoint", "/v1/chat/completions"))
     return post_json(
         actor_url.rstrip("/") + endpoint,
         {"Authorization": f"Bearer {actor_token}"},
-        payload,
+        {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Return strict JSON only. Generate synthetic training data."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": float(teacher.get("temperature", 0.45)),
+            "max_tokens": int(teacher.get("max_tokens", 8192)),
+        },
         timeout=timeout,
     )
 
@@ -291,32 +248,57 @@ def completion_text(response: dict[str, Any]) -> str:
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") in {"text", "output_text"}:
-                parts.append(str(item.get("text", "")))
-        return "\n".join(parts).strip()
+        return "\n".join(
+            str(item.get("text", ""))
+            for item in content
+            if isinstance(item, dict) and item.get("type") in {"text", "output_text"}
+        ).strip()
     raise ValueError("teacher message content is not text")
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        first_newline = stripped.find("\n")
-        last_fence = stripped.rfind("```")
-        if first_newline != -1 and last_fence > first_newline:
-            stripped = stripped[first_newline + 1 : last_fence].strip()
+    text = text.strip()
+    if text.startswith("```"):
+        first = text.find("\n")
+        last = text.rfind("```")
+        if first >= 0 and last > first:
+            text = text[first + 1 : last].strip()
     try:
-        value = json.loads(stripped)
+        value = json.loads(text)
     except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
+        start, end = text.find("{"), text.rfind("}")
         if start < 0 or end <= start:
             raise
-        value = json.loads(stripped[start : end + 1])
+        value = json.loads(text[start : end + 1])
     if not isinstance(value, dict):
         raise ValueError("teacher output must be a JSON object")
     return value
+
+
+def validate_family_contract(
+    family: str,
+    messages: list[dict[str, Any]],
+    tools: list[Any],
+    sources: list[dict[str, str]],
+) -> None:
+    if not sources:
+        raise ValueError("Brave-grounded example has no source URLs")
+    for message in messages:
+        if not isinstance(message, dict):
+            raise ValueError("message must be an object")
+        if message.get("role") not in {"system", "user", "assistant", "tool"}:
+            raise ValueError("invalid message role")
+        if "content" not in message:
+            raise ValueError("message missing content")
+    if family == "tool-calling":
+        has_call = any(m.get("role") == "assistant" and m.get("tool_calls") for m in messages)
+        has_result = any(m.get("role") == "tool" for m in messages)
+        if not tools or not has_call or not has_result:
+            raise ValueError("tool-calling example lacks tools/tool_calls/tool response")
+    if family == "independent-research":
+        rendered = canonical_json(messages)
+        if not any(source["url"] in rendered for source in sources):
+            raise ValueError("independent-research answer must cite a Brave source URL")
 
 
 def normalize_example(
@@ -336,22 +318,13 @@ def normalize_example(
     messages = raw.get("messages")
     if not isinstance(messages, list) or len(messages) < 2:
         raise ValueError("teacher example needs at least two messages")
-    for message in messages:
-        if not isinstance(message, dict) or message.get("role") not in {"system", "user", "assistant", "tool"}:
-            raise ValueError("invalid teacher message")
     tools = raw.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("tools must be an array")
+    validate_family_contract(family, messages, tools, source_meta)
     metadata = raw.get("metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
-    metadata = {
-        **metadata,
-        "grounded": True,
-        "brave_query": query,
-        "source_count": len(source_meta),
-        "topic": topic,
-    }
+    metadata = metadata if isinstance(metadata, dict) else {}
+    metadata = {**metadata, "grounded": True, "brave_query": query, "source_count": len(source_meta), "topic": topic}
     material = {
         "task": task,
         "messages": messages,
@@ -385,32 +358,18 @@ def normalize_example(
 
 
 def family_query(topic: str, family: str) -> str:
-    suffix = {
-        "independent-research": "primary sources documentation evidence verification",
-        "osint-tool-design": "public source OSINT tool API provenance rate limits",
-        "osint-skill-design": "OSINT research workflow evidence provenance search skill",
-        "starintel-tool-design": "StarIntel tools document ingest actor provenance API",
-        "tool-calling": "API tool schema examples documentation",
-        "ingest-jobs": "document ingest bulk validation retry idempotency",
-        "migrations": "schema migration compatibility validation rollback",
-        "starintel-json-synthetic": "JSON schema provenance document examples",
-        "starintel-prolog-synthetic": "Prolog rules provenance validation actor workflow",
-        "document-generation": "technical report specification runbook evidence",
-        "actor-system-generation": "actor model supervision message passing bounded concurrency",
-    }[family]
-    return f"{topic} {suffix}"
+    return bounded_query(f"{topic} {QUERY_SUFFIX[family]}")
 
 
 def iter_seed_jobs(cfg: dict[str, Any], only_family: str | None) -> Iterable[tuple[str, str]]:
     for seed in cfg.get("seed", []):
         topic = str(seed["topic"])
-        for family in seed.get("families", []):
-            family = str(family)
+        for raw_family in seed.get("families", []):
+            family = str(raw_family)
             if family not in ALLOWED_TASKS:
                 raise ValueError(f"unknown synthesis family {family!r}")
-            if only_family and family != only_family:
-                continue
-            yield topic, family
+            if not only_family or family == only_family:
+                yield topic, family
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
@@ -420,12 +379,10 @@ def cmd_generate(args: argparse.Namespace) -> None:
     actor_url = args.actor_url or os.getenv("STAR_LLM_ACTOR_URL", "")
     model = args.model or os.getenv("STAR_SYNTH_MODEL", "")
     ack = args.ack_brave_training_rights or os.getenv("STAR_BRAVE_TRAINING_RIGHTS_ACK", "").lower() in {"1", "true", "yes"}
-
     if not ack:
         raise SystemExit(
-            "Brave-backed fine-tuning data generation requires confirmation that your Brave plan permits "
-            "the intended storage/training use. Set STAR_BRAVE_TRAINING_RIGHTS_ACK=1 or pass "
-            "--ack-brave-training-rights."
+            "Confirm that the configured Brave plan permits the intended storage/training use with "
+            "STAR_BRAVE_TRAINING_RIGHTS_ACK=1 or --ack-brave-training-rights."
         )
     if not brave_key:
         raise SystemExit("BRAVE_SEARCH_API_KEY is required")
@@ -434,54 +391,53 @@ def cmd_generate(args: argparse.Namespace) -> None:
     if not model or model == "configurable":
         raise SystemExit("STAR_SYNTH_MODEL or --model is required")
 
-    examples_per_seed = args.examples_per_seed or int(cfg.get("examples_per_seed", 3))
-    max_examples = int(cfg["output"].get("max_examples_per_teacher_call", 8))
-    examples_per_seed = min(examples_per_seed, max_examples)
+    count = args.examples_per_seed or int(cfg.get("examples_per_seed", 4))
+    count = max(1, min(count, int(cfg["output"].get("max_examples_per_teacher_call", 8))))
     prompt_version = str(cfg["teacher"].get("prompt_version", "brave-synth-v1"))
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
     jobs = list(iter_seed_jobs(cfg, args.family))
     random.Random(int(cfg.get("seed", 545))).shuffle(jobs)
-    if args.max_jobs:
-        jobs = jobs[: args.max_jobs]
+    if args.max_jobs is not None:
+        jobs = jobs[: max(0, args.max_jobs)]
 
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for topic, family in jobs:
         query = family_query(topic, family)
         brave = brave_context(query, cfg, brave_key, args.timeout)
-        grounding, sources = extract_grounding(brave)
+        grounding, raw_sources = extract_grounding(brave)
         if not grounding:
             print(f"warning: no Brave grounding for {family}: {query}", file=sys.stderr)
             continue
         context = grounding_text(grounding)
-        context_hash = sha256_text(context)
-        source_meta = source_metadata(grounding, sources)
-        prompt = teacher_prompt(topic, family, examples_per_seed, context)
-        response = teacher_completion(prompt, cfg, actor_url, actor_token, model, args.timeout)
-        parsed = parse_json_object(completion_text(response))
-        examples = parsed.get("examples", [])
+        sources = source_metadata(grounding, raw_sources)
+        response = teacher_completion(teacher_prompt(topic, family, count, context), cfg, actor_url, actor_token, model, args.timeout)
+        examples = parse_json_object(completion_text(response)).get("examples", [])
         if not isinstance(examples, list):
             raise ValueError("teacher examples must be an array")
         accepted = 0
-        for raw in examples[:examples_per_seed]:
+        for raw in examples[:count]:
             if not isinstance(raw, dict):
                 continue
-            row = normalize_example(
-                raw,
-                family=family,
-                topic=topic,
-                query=query,
-                source_meta=source_meta,
-                context_hash=context_hash,
-                teacher_model=model,
-                prompt_version=prompt_version,
-            )
+            try:
+                row = normalize_example(
+                    raw,
+                    family=family,
+                    topic=topic,
+                    query=query,
+                    source_meta=sources,
+                    context_hash=sha256_text(context),
+                    teacher_model=model,
+                    prompt_version=prompt_version,
+                )
+            except ValueError as exc:
+                print(f"warning: rejected {family} synthetic example: {exc}", file=sys.stderr)
+                continue
             if row["content_sha256"] in seen:
                 continue
             seen.add(row["content_sha256"])
             rows.append(row)
             accepted += 1
-        print(json.dumps({"family": family, "sources": len(source_meta), "examples": accepted}), file=sys.stderr)
+        print(json.dumps({"family": family, "sources": len(sources), "examples": accepted}), file=sys.stderr)
 
     output = pathlib.Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -496,15 +452,10 @@ def cmd_brave_probe(args: argparse.Namespace) -> None:
     brave_key = args.brave_key or os.getenv("BRAVE_SEARCH_API_KEY", "")
     if not brave_key:
         raise SystemExit("BRAVE_SEARCH_API_KEY is required")
-    result = brave_context(args.query, cfg, brave_key, args.timeout)
-    grounding, sources = extract_grounding(result)
+    grounding, raw_sources = extract_grounding(brave_context(args.query, cfg, brave_key, args.timeout))
     print(
         json.dumps(
-            {
-                "query": args.query,
-                "grounding_items": len(grounding),
-                "sources": source_metadata(grounding, sources),
-            },
+            {"query": args.query, "grounding_items": len(grounding), "sources": source_metadata(grounding, raw_sources)},
             indent=2,
             sort_keys=True,
         )
