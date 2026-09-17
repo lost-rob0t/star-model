@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   inventory:
@@ -28,16 +29,27 @@ jobs:
     outputs:
       matrix: ${{ steps.repos.outputs.matrix }}
     steps:
-      - name: Inventory public repositories
+      - uses: actions/checkout@v4
+      - name: Inventory all configured public repositories
         id: repos
         env:
           GH_TOKEN: ${{ github.token }}
-          OWNER: ${{ github.repository_owner }}
         shell: bash
         run: |
           set -euo pipefail
-          repos="$(gh api --paginate "/users/${OWNER}/repos?type=public&per_page=100" \
-            --jq '[.[] | select(.fork == false and .archived == false) | {name: .full_name, clone_url: .clone_url}]')"
+          : > repos.ndjson
+          while IFS= read -r owner; do
+            gh api --paginate "/users/${owner}/repos?type=public&per_page=100" \
+              --jq '.[] | select(.fork == false and .archived == false) | {name: .full_name, clone_url: .clone_url}' \
+              >> repos.ndjson
+          done < <(jq -r '.owners[]' config/repositories.json)
+
+          jq -c '.extra_repositories[]? | {
+            name: .name,
+            clone_url: (.clone_url // ("https://github.com/" + .name + ".git"))
+          }' config/repositories.json >> repos.ndjson
+
+          repos="$(jq -sc 'unique_by(.name)' repos.ndjson)"
           printf 'matrix=%s\n' "$(jq -cn --argjson repos "$repos" '{include:$repos}')" >> "$GITHUB_OUTPUT"
 
   harvest:
@@ -52,7 +64,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Clone public source
+      - name: Clone public source and taskify
         env:
           REPO: ${{ matrix.name }}
           CLONE_URL: ${{ matrix.clone_url }}
@@ -113,6 +125,8 @@ jobs:
   mix:
     needs: [harvest, synthesize]
     runs-on: ubuntu-latest
+    env:
+      DATASET_ARTIFACT: star-model-dataset-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -123,22 +137,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Normalize, deduplicate and split
+      - name: Normalize, deduplicate, split, and package trainer
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dataset
+          mkdir -p dataset/trainer
           cat incoming/*.jsonl > dataset/all.raw.jsonl
           python scripts/validate_mix.py \
             --input dataset/all.raw.jsonl \
             --output-dir dataset
+          cp trainer/train_qlora.py trainer/requirements.txt dataset/trainer/
           python scripts/star_dataset.py manifest \
             --name "star-model-${GITHUB_SHA}" \
+            --artifact-repository "$GITHUB_REPOSITORY" \
+            --artifact-run-id "$GITHUB_RUN_ID" \
+            --artifact-name "$DATASET_ARTIFACT" \
             --output dataset/manifest.json \
             dataset/train.jsonl dataset/validation.jsonl dataset/test.jsonl
       - uses: actions/upload-artifact@v4
         with:
-          name: star-model-dataset-${{ github.sha }}
+          name: ${{ env.DATASET_ARTIFACT }}
           path: dataset/
           if-no-files-found: error
           retention-days: 30
@@ -159,12 +177,18 @@ jobs:
       - name: Build fine-tune request
         env:
           BASE_MODEL: ${{ vars.STAR_BASE_MODEL }}
+          MAX_HOURLY_GPU_USD: ${{ vars.STAR_MAX_HOURLY_GPU_USD || '2.0' }}
+          MAX_TOTAL_GPU_USD: ${{ vars.STAR_MAX_TOTAL_GPU_USD || '20.0' }}
+          GPU_RAM_GB_MIN: ${{ vars.STAR_GPU_RAM_GB_MIN || '24' }}
         run: |
           set -euo pipefail
           test -n "${BASE_MODEL:-}" || { echo 'STAR_BASE_MODEL repository variable is required'; exit 1; }
           python scripts/star_dataset.py actor-request \
             --manifest dataset/manifest.json \
             --base-model "$BASE_MODEL" \
+            --gpu-ram-gb-min "$GPU_RAM_GB_MIN" \
+            --max-hourly-gpu-usd "$MAX_HOURLY_GPU_USD" \
+            --max-total-gpu-usd "$MAX_TOTAL_GPU_USD" \
             --output fine-tune.json
       - name: Submit training to llm.starintel.actor
         env:
