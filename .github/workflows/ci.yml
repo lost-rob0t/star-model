@@ -18,7 +18,11 @@ jobs:
       - name: Compile Python entry points
         run: |
           set -euo pipefail
-          python -m py_compile scripts/star_dataset.py scripts/validate_mix.py trainer/train_qlora.py
+          python -m py_compile \
+            scripts/star_dataset.py \
+            scripts/validate_mix.py \
+            scripts/request_synthesis.py \
+            trainer/train_qlora.py
       - name: Build and validate a tiny public-code corpus
         run: |
           set -euo pipefail
