@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://starintel.actor/schema/star-model-example-v1.json",
+  "title": "Star Model Training Example",
+  "type": "object",
+  "required": ["id", "task", "messages", "provenance", "content_sha256", "split"],
+  "properties": {
+    "id": {"type": "string"},
+    "task": {
+      "type": "string",
+      "enum": [
+        "code",
+        "prolog",
+        "starintel-prolog-synthetic",
+        "starintel-json-synthetic",
+        "tool-calling",
+        "ingest-jobs",
+        "migrations",
+        "osint-tool-design"
+      ]
+    },
+    "messages": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": {"type": "string", "enum": ["system", "user", "assistant", "tool"]},
+          "content": {"type": ["string", "object", "array"]},
+          "tool_call_id": {"type": "string"},
+          "name": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "tools": {"type": "array"},
+    "provenance": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["public-repository", "public-prolog", "synthetic", "teacher-trace"]},
+        "repository": {"type": "string"},
+        "path": {"type": "string"},
+        "commit": {"type": "string"},
+        "license": {"type": "string"},
+        "generator": {"type": "string"},
+        "model": {"type": "string"},
+        "prompt_version": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "split": {"type": "string", "enum": ["train", "validation", "test"]},
+    "metadata": {"type": "object"}
+  },
+  "additionalProperties": false
+}
