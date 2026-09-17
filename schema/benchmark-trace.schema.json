@@ -12,6 +12,9 @@
       "enum": [
         "independent-research",
         "document-generation",
+        "osint-tool-design",
+        "osint-skill-design",
+        "starintel-tool-design",
         "actor-system-generation",
         "tool-calling",
         "ingest-jobs"
