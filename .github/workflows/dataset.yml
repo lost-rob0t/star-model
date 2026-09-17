@@ -1,0 +1,186 @@
+name: dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      synth_examples:
+        description: Maximum synthetic examples requested from llm.starintel.actor
+        required: false
+        default: "2000"
+      start_training:
+        description: Submit a fine-tune request to llm.starintel.actor after validation
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.repos.outputs.matrix }}
+    steps:
+      - name: Inventory public repositories
+        id: repos
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repos="$(gh api --paginate "/users/${OWNER}/repos?type=public&per_page=100" \
+            --jq '[.[] | select(.fork == false and .archived == false) | {name: .full_name, clone_url: .clone_url}]')"
+          printf 'matrix=%s\n' "$(jq -cn --argjson repos "$repos" '{include:$repos}')" >> "$GITHUB_OUTPUT"
+
+  harvest:
+    needs: inventory
+    if: ${{ fromJson(needs.inventory.outputs.matrix).include[0] != null }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.inventory.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Clone public source
+        env:
+          REPO: ${{ matrix.name }}
+          CLONE_URL: ${{ matrix.clone_url }}
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --depth=1 "$CLONE_URL" source
+          python scripts/star_dataset.py build \
+            --repo source \
+            --repository "$REPO" \
+            --output "out/${REPO//\//__}.jsonl"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corpus-${{ strategy.job-index }}
+          path: out/*.jsonl
+          if-no-files-found: error
+          retention-days: 7
+
+  synthesize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Request synthetic corpus from llm.starintel.actor
+        env:
+          STAR_LLM_ACTOR_URL: ${{ secrets.STAR_LLM_ACTOR_URL }}
+          STAR_LLM_ACTOR_TOKEN: ${{ secrets.STAR_LLM_ACTOR_TOKEN }}
+          MAX_EXAMPLES: ${{ inputs.synth_examples || '2000' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${STAR_LLM_ACTOR_URL:-}" || { echo 'STAR_LLM_ACTOR_URL is required'; exit 1; }
+          test -n "${STAR_LLM_ACTOR_TOKEN:-}" || { echo 'STAR_LLM_ACTOR_TOKEN is required'; exit 1; }
+          mkdir -p out
+          jq -n \
+            --argjson n "$MAX_EXAMPLES" \
+            '{
+              type:"llm.dataset.synthesize",
+              version:1,
+              corpus:"star-model",
+              max_examples:$n,
+              task_families:[
+                "starintel-prolog-synthetic",
+                "starintel-json-synthetic",
+                "tool-calling",
+                "ingest-jobs",
+                "migrations",
+                "osint-tool-design"
+              ],
+              teacher:{policy:"stronger-than-target",provider_policy:"cheapest-allowed"},
+              requirements:{provenance:true,content_hash:true,reject_secrets:true}
+            }' > request.json
+          curl --fail-with-body --retry 4 --retry-all-errors \
+            -H "Authorization: Bearer ${STAR_LLM_ACTOR_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data-binary @request.json \
+            "${STAR_LLM_ACTOR_URL%/}/v1/dataset/synthesize" > out/synthetic.jsonl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corpus-synthetic
+          path: out/synthetic.jsonl
+          if-no-files-found: error
+          retention-days: 7
+
+  mix:
+    needs: [harvest, synthesize]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: corpus-*
+          path: incoming
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Normalize, deduplicate and split
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dataset
+          cat incoming/*.jsonl > dataset/all.raw.jsonl
+          python scripts/validate_mix.py \
+            --input dataset/all.raw.jsonl \
+            --output-dir dataset
+          python scripts/star_dataset.py manifest \
+            --name "star-model-${GITHUB_SHA}" \
+            --output dataset/manifest.json \
+            dataset/train.jsonl dataset/validation.jsonl dataset/test.jsonl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: star-model-dataset-${{ github.sha }}
+          path: dataset/
+          if-no-files-found: error
+          retention-days: 30
+
+  train:
+    needs: mix
+    if: ${{ inputs.start_training == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: star-model-dataset-${{ github.sha }}
+          path: dataset
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build fine-tune request
+        env:
+          BASE_MODEL: ${{ vars.STAR_BASE_MODEL }}
+        run: |
+          set -euo pipefail
+          test -n "${BASE_MODEL:-}" || { echo 'STAR_BASE_MODEL repository variable is required'; exit 1; }
+          python scripts/star_dataset.py actor-request \
+            --manifest dataset/manifest.json \
+            --base-model "$BASE_MODEL" \
+            --output fine-tune.json
+      - name: Submit training to llm.starintel.actor
+        env:
+          STAR_LLM_ACTOR_URL: ${{ secrets.STAR_LLM_ACTOR_URL }}
+          STAR_LLM_ACTOR_TOKEN: ${{ secrets.STAR_LLM_ACTOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --retry 4 --retry-all-errors \
+            -H "Authorization: Bearer ${STAR_LLM_ACTOR_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data-binary @fine-tune.json \
+            "${STAR_LLM_ACTOR_URL%/}/v1/fine-tunes" | tee fine-tune-response.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fine-tune-request-${{ github.sha }}
+          path: |
+            fine-tune.json
+            fine-tune-response.json
