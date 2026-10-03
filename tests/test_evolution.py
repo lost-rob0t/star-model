@@ -116,12 +116,20 @@ class EvolutionTests(unittest.TestCase):
         self.assertEqual(docs[0]["schemaVersion"], self.cfg["services"]["starintel_schema_version"])
         self.assertEqual(docs[0]["extensions"]["star_model"]["kind"], "fine-tune-benchmark")
         self.assertEqual(docs[0]["contentType"], "application/json")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        for legacy in ("_id", "schema_version", "data"):
+            self.assertNotIn(legacy, docs[0])
+        payload = __import__("json").loads(docs[0]["rawContent"])
+        candidate, expected = next(iter(score_doc["candidates"].items()))
+        self.assertEqual(payload["candidate_id"], candidate)
+        for key in ("fitness", "metrics", "accepted_artifacts", "failures"):
+            self.assertEqual(payload[key], expected[key])
+        self.assertEqual(payload["pareto"], candidate in score_doc.get("pareto_front", []))
 
 class CanonicalVersionTests(unittest.TestCase):
     def test_legacy_output_cannot_be_relabelled(self):
         with self.assertRaises(ValueError):
             EVO.starintel_result_documents({'candidates':{}}, {'services':{'starintel_schema_version':'0.9.0','starintel_dataset':'test'}})
+
+
+if __name__ == "__main__":
+    unittest.main()
