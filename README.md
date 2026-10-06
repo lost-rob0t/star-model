@@ -244,8 +244,8 @@ Install `python -m pip install -r requirements.txt` before emitting archive docu
 Evolution results now use flat StarLang 0.10.1 documents (`id`, `schemaVersion`,
 `rawContent`, `contentType`) and validate with the immutable Python consumer.
 Benchmark-specific metadata remains under `extensions.star_model`.
-The canonical authority is StarLang commit
-`765f1673851192bcaf1cdd2f35c47608f979b079`; the Python consumer pin depends on
-starintel-doc PR #14 and the StarLang authority PR chain #192 → #194 → #195.
+The canonical authority is StarLang, recorded by the immutable Python consumer
+pinned in `requirements.txt`. That consumer and its authority prerequisites must
+be available before release.
 Changing the config version to a historical value is rejected rather than
 relabeling documents. Existing benchmark artifacts and training contracts are unchanged.
