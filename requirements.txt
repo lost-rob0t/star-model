@@ -1,0 +1,1 @@
+starintel-doc @ git+https://github.com/lost-rob0t/starintel-doc.git@6aa8051dc7ea560943a60a25e1d600467f2778bc

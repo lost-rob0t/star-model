@@ -398,7 +398,10 @@ def failure_summary(rows: list[dict[str, Any]], cfg: dict[str, Any], limit: int)
 
 def starintel_result_documents(score_doc: dict[str, Any], cfg: dict[str, Any]) -> list[dict[str, Any]]:
     service = cfg["services"]
-    schema_version = str(service.get("starintel_schema_version", "0.9.0"))
+    schema_version = str(service.get("starintel_schema_version", "0.10.1"))
+    if schema_version != "0.10.1":
+        raise ValueError("StarIntel output requires the canonical 0.10.1 contract")
+    from starintel_canonical import validate_document
     dataset = str(service["starintel_dataset"])
     documents = []
     for candidate, score in score_doc["candidates"].items():
@@ -412,16 +415,13 @@ def starintel_result_documents(score_doc: dict[str, Any], cfg: dict[str, Any]) -
         }
         documents.append(
             {
-                "_id": f"evolution-{digest(payload)[:24]}",
+                "id": f"evolution-{digest(payload)[:24]}",
                 "dataset": dataset,
                 "dtype": "document",
-                "schema_version": schema_version,
-                "sources": ["star-model:evolution-benchmark"],
-                "data": {
-                    "document_kind": "fine-tune-benchmark",
-                    "body": canonical_json(payload),
-                    "format": "application/json",
-                },
+                "schemaVersion": schema_version,
+                "collector": "star-model:evolution-benchmark",
+                "rawContent": canonical_json(payload),
+                "contentType": "application/json",
                 "extensions": {
                     "star_model": {
                         "kind": "fine-tune-benchmark",
@@ -430,6 +430,8 @@ def starintel_result_documents(score_doc: dict[str, Any], cfg: dict[str, Any]) -
                 },
             }
         )
+    for document in documents:
+        validate_document(document)
     return documents
 
 

@@ -61,7 +61,7 @@ training_endpoint = "/v1/fine-tunes"
 synthesis_endpoint = "/v1/dataset/synthesize"
 starintel_bulk_ingest_endpoint = "/api/v1/documents/bulk"
 starintel_dataset = "star-model-evolution"
-starintel_schema_version = "0.9.0"
+starintel_schema_version = "0.10.1"
 
 [router]
 enabled = true
@@ -69,3 +69,4 @@ feature_buckets = 4096
 hidden_dim = 128
 epochs = 12
 learning_rate = 0.001
+
